@@ -1,0 +1,59 @@
+---
+title: 'Exploratory analysis: commits'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+```
+
+```{r}
+rm(list=ls())
+suppressPackageStartupMessages(library(bigrquery))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+source("~/Dropbox/Documents/Github_mining/src/R/project_info.R")
+repo_level_data <- load_repo_features()
+```
+
+# Histograms
+
+```{r}
+# Number of commits
+qplot(log10(repo_level_data$num_commits),
+      geom = "histogram",
+      main = "Histogram of number of commits",
+      xlab = "Number of commits (log10)",
+      ylab = "Number of repos",
+      fill = I("darkmagenta")) +
+  theme(plot.title = element_text(size = 24),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+# Project duration
+
+```{r}
+# Scatter plot of latest commit vs first commit
+min_date <- min(as.Date(repo_level_data$first_commit), na.rm = T)
+max_date <- max(as.Date(repo_level_data$last_commit), na.rm = T)
+ggplot(data = repo_level_data, aes(x = as.Date(first_commit), y = as.Date(last_commit))) +
+  geom_point(aes(color = commit_span_days)) +
+  scale_color_gradientn(colors = c("red", "green", "blue"), 
+                        name = "Commit span (years)",
+                        labels = function(x) round(x / 365)) +
+  coord_cartesian(xlim = c(min_date, max_date),
+                  ylim = c(min_date, max_date)) +
+  labs(title = "Project time spans",
+       x = "First commit",
+       y = "Latest commit") +
+  theme(plot.title = element_text(size = 24),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_blank())
+```
+
+
+
+
+

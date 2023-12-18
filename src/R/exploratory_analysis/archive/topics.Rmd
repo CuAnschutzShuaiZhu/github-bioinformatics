@@ -1,0 +1,100 @@
+---
+title: "Topic modeling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("~/Dropbox/Documents/Github_mining/src/R/document_classification/topics.R")
+```
+
+```{r plot_topics}
+# Function to plot top terms
+plot_top_terms <- function(topics) {
+  top_terms <- topics %>%
+    group_by(topic) %>%
+    top_n(10, beta) %>%
+    ungroup() %>%
+    arrange(topic, -beta)
+  
+  top_terms %>%
+    mutate(term = reorder(term, beta)) %>%
+    ggplot(aes(term, beta, fill = factor(topic))) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~ topic, scales = "free") +
+    coord_flip()
+}
+
+# Make plots
+plot_top_terms(topics)
+plot_top_terms(topics_specialized)
+```
+
+```{r repos_per_topic}
+# Count number of repos associated with each topic
+num_repos_per_topic <- abstract_top_topics %>% 
+  group_by(topic) %>% 
+  summarize(total = n()) %>%
+  arrange(-total)
+
+ggplot(num_repos_per_topic, aes(topic, total)) + 
+  geom_bar(stat="identity") + 
+  ylab("Number of repos") + 
+  xlab("Topic")
+```
+
+```{r languages}
+# Read in repo data and get bytes per language
+load(repo_data_file)
+bytes_per_lang <- repo_data_cached %>% select(repo_name, starts_with("bytes"))
+
+# Summarize total bytes per topic. Has bytes double counted if repos have multiple topics.
+bytes_per_topic <- abstract_top_topics %>% 
+  select(repo_name, topic) %>% 
+  left_join(bytes_per_lang, by = "repo_name") %>% 
+  group_by(topic) %>% 
+  summarise_at(vars(starts_with("bytes")), mean)
+colnames(bytes_per_topic) <- gsub("bytes_", "", colnames(bytes_per_topic))
+bytes_per_topic <- bytes_per_topic %>% 
+  melt(id.vars = "topic") %>%
+  rename(Topic = topic, Language = variable, Bytes = value)
+
+# Bubble plot of amount of code per language vs topic
+ggplot(bytes_per_topic, aes(Topic, Language)) + geom_point(aes(size = Bytes))
+```
+
+```{r date}
+topic_vs_year <- abstract_top_topics %>% 
+  select(repo_name, topic) %>% 
+  left_join(article_data %>% select(repo_name, year), by = "repo_name") %>%
+  group_by(topic, year) %>%
+  summarise(repos = n()) %>%
+  ungroup() %>%
+  group_by(year) %>% 
+  mutate(repos_pct = repos / sum(repos))
+
+# Make area plots
+ggplot(topic_vs_year, aes(x = year)) + geom_area(aes(y = repos, fill = topic))
+ggplot(topic_vs_year, aes(x = year)) + geom_area(aes(y = repos_pct, fill = topic))
+```
+
+```{r journals}
+articles_per_journal <- article_data %>% 
+  filter(!is.na(iso_abbrev)) %>%
+  group_by(iso_abbrev) %>% 
+  summarise(num_articles = n()) %>% 
+  arrange(-num_articles)
+
+top_journals <- articles_per_journal[1:10, "iso_abbrev"][[1]]
+
+topics_by_journal <- abstract_top_topics %>% 
+  select(repo_name, topic) %>% 
+  left_join(article_data %>% select(repo_name, iso_abbrev), by = "repo_name") %>% 
+  rename(journal = iso_abbrev) %>%
+  filter(journal %in% top_journals) %>%
+  group_by(topic, journal) %>%
+  summarise(num_repos = n())
+
+# Bubble plot of topics vs journals
+ggplot(topics_by_journal, aes(topic, journal)) + geom_point(aes(size = num_repos))
+```

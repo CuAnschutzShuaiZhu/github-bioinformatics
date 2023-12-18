@@ -1,0 +1,149 @@
+---
+title: 'Exploratory analysis: programming languages'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = T, warning = F, message = F)
+source("~/Dropbox/Documents/Github_mining/src/R/project_info.R")
+proj <- proj_main
+repo_level_data <- load_repo_features(saved_repo_features_main)
+```
+
+
+```{r echo = F}
+source("~/Dropbox/Documents/Github_mining/src/R/exploratory_analysis/languages.R", local = TRUE)
+```
+
+
+```{r}
+# Plot number of repos by language
+ggplot(top_langs, aes(x = factor(language), y = num_repos)) + 
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(y = paste("Number of repos including language (n = ", nrow(lang_by_repo), ")", sep = ""),
+       x = "Language",
+       title = "Number of repos by language") +
+  theme(plot.title = element_text(size = 24),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+
+```{r}
+# Plot number of repos by language pair
+ggplot(top_pairs, aes(x = languages, y = num_repos)) + 
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(y = paste("Number of repos including both languages (n = ", nrow(lang_by_repo), ")", sep = ""),
+       x = "Languages",
+       title = "Number of repos by language pair") +
+  theme(plot.title = element_text(size = 24),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16))
+```
+
+
+```{r}
+
+# Plot bytes per language
+ggplot(lang_bytes %>% top_n(30, total_bytes), aes(
+  x = reorder(language, -total_bytes), 
+  y = total_bytes)
+) + geom_bar(stat = "identity") +
+  labs(y = paste("Total bytes"),
+       x = "Language",
+       title = "Number of bytes of code by language") +
+  scale_y_continuous(labels = comma) +
+  theme(plot.title = element_text(size = 20),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+
+```{r fig.width = 8, fig.height = 6}
+# Plot number of bytes by type system
+ggplot(bytes_by_type_system, aes(x = reorder(system, -total_bytes), y = total_bytes)) + 
+  geom_bar(stat = "identity") +
+  labs(y = paste("Total bytes"),
+       x = "Type system",
+       title = "Number of bytes of code by language type system") +
+  scale_y_continuous(labels = comma) +
+  geom_text(aes(label = comma(total_bytes)), vjust = -1) +
+  theme(plot.title = element_text(size = 20),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_text(size = 12))
+```
+
+
+```{r fig.width = 8, fig.height = 6}
+# Plot number of bytes by type system and strength
+ggplot(bytes_by_type_system_and_strength, aes(x = reorder(desc, -total_bytes), y = total_bytes)) + 
+  geom_bar(stat = "identity") +
+  labs(y = paste("Total bytes"),
+       x = "Type system",
+       title = "Number of bytes of code by type system and strength") +
+  scale_y_continuous(labels = comma) +
+  geom_text(aes(label = comma(total_bytes)), vjust = -1) +
+  theme(plot.title = element_text(size = 20),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r fig.width = 8, fig.height = 6}
+# Plot number of bytes by execution method
+ggplot(bytes_by_exec_method, aes(x = reorder(exec_method, -total_bytes), y = total_bytes)) + 
+  geom_bar(stat = "identity") +
+  labs(y = paste("Total bytes"),
+       x = "Execution method",
+       title = "Number of bytes of code by execution method") +
+  scale_y_continuous(labels = comma) +
+  geom_text(aes(label = comma(total_bytes)), vjust = -1) +
+  theme(plot.title = element_text(size = 20),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_text(size = 12))
+```
+
+
+```{r fig.width = 14, fig.height = 8.5}
+# Plot number of bytes by paradigm
+ggplot(bytes_by_paradigm, aes(x = reorder(paradigm, total_bytes), y = total_bytes)) + 
+  geom_bar(stat = "identity") +
+  labs(y = paste("Total bytes"),
+       x = "Language paradigm",
+       title = "Total bytes of code by language paradigm") +
+  coord_flip() +
+  scale_y_continuous(labels = comma) +
+  theme(plot.title = element_text(size = 20),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        axis.text = element_text(size = 12))
+
+```
+
+```{r fig.width = 11, fig.height = 11}
+# Analysis of how repos combine languages with different paradigms
+ggplot(paradigm_pairs, aes(x = paradigm1, y = paradigm2)) +
+  geom_tile(aes(fill = num_repos_both)) +
+  scale_fill_gradientn(colors = c("white", "darkorchid4", "forestgreen"), 
+                       values = c(0, 0.1, 1),
+                       name = "Number of repos") +
+  labs(title = "Number of repositories combining languages with both paradigms") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        plot.title = element_text(size = 20))
+```
+
+
+
+

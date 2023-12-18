@@ -1,0 +1,58 @@
+---
+title: 'Exploratory analysis: code quality'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# knitr options
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r echo = F}
+# Environment setup
+source("~/Dropbox/Documents/Github_mining/src/R/exploratory_analysis/quality.R")
+```
+
+```{r}
+# Function to make plot of code chunk frequencies vs lines of code in repo
+scatter_dup_loc <- function(ccf, chunk_size, min_line_len) {
+axmax <- log10(max(ccf$lines_of_code)) + 0.1
+ggplot(ccf, aes(x = log10(lines_of_code), y = log10(sum_dup_chunk_len))) + 
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0) +
+  xlim(0, axmax) +
+  ylim(0, axmax) +
+  labs(title = paste("Lines of code in duplicate chunks (", chunk_size, " lines; length >= ", min_line_len, ")", sep=""),
+       x = "Total lines of code in repo (log10)",
+       y = "Total lines of code in duplicated chunks (lines can be double counted)")
+}
+```
+
+
+### Lines of code in duplicated chunks (lines can be double counted)
+
+```{r fig.height = 7, fig.width = 7}
+# Make scatter plots
+scatter_dup_loc(dup_loc_10_50, 10, 50)
+scatter_dup_loc(dup_loc_5_80, 5, 80)
+```
+
+
+### Number of unique lines in dupicated chunks
+
+Number of unique lines in duplicated chunks of 10 lines, length at least 50
+
+```{r echo = T}
+num_unique_dup_lines_10_50
+```
+
+Number of unique lines in duplicated chunks of 5 lines, length at least 80
+
+```{r echo = T}
+num_unique_dup_lines_5_80
+```
+
+
+
+
+

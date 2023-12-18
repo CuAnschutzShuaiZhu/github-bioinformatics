@@ -1,0 +1,692 @@
+---
+title: "Gender analysis of developers and paper authors"
+output: html_document
+---
+
+## Environment setup
+
+```{r setup}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+suppressPackageStartupMessages(library(bigrquery))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(RColorBrewer))
+source("~/Dropbox/Documents/Github_mining/src/R/project_info.R")
+proj_main <- proj_main
+proj_high_prof <- proj_high_profile
+```
+
+## Load data from BigQuery
+
+Genders were inferred for each "valid" unique name of paper authors, commit authors and committers.
+
+```{r load_names}
+# Get mapping of names to genders from BigQuery
+gender_main <- list_tabledata(project = proj_main, dataset = ds_analysis, table = table_gender_by_name)
+gender_high_prof <- list_tabledata(project = proj_high_prof, dataset = ds_analysis, table = table_gender_by_name)
+
+# Look at gender breakdown of names we tried to call a gender on
+gender_main %>% group_by(gender) %>% dplyr::summarize(num_developers = n())
+gender_high_prof %>% group_by(gender) %>% dplyr::summarize(num_developers = n())
+
+# Function to get gender for a first name
+get_gender <- function(first_name, gender_table) {
+  row <- which(gender_table$first_name == first_name)
+  if(length(row) == 0) NA
+  else gender_table[row[1], "gender"]
+}
+
+# Function to get gender for a full name
+get_gender_full_name <- function(full_name, gender_table) {
+  tokens <- unlist(strsplit(full_name, "\\s+"))
+  get_gender(tokens[1], gender_table)
+}
+```
+
+Get commit records
+
+```{r load_commits}
+# Function to load commits and do some processing
+get_commits <- function(proj, gender_table) {
+  query <- paste("
+                  SELECT
+                    repo_name,
+                    author_login,
+                    author_id,
+                    author_name,
+                    committer_login,
+                    committer_id,
+                    committer_name,
+                    commit_message
+                  FROM
+                    [", proj, ":", ds_gh, ".", table_commits, "]
+", sep = "")
+  commits <- query_exec(query, project = proj, max_pages = Inf)
+  commits <- commits %>% 
+    left_join(gender_table %>% select(full_name, gender), by = c("author_name" = "full_name")) %>% 
+    rename(author_gender = gender)  %>% 
+    left_join(gender_table %>% select(full_name, gender), by = c("committer_name" = "full_name")) %>% 
+    rename(committer_gender = gender)
+  
+  # Make a version of commits table with null author and committer logins filled in with author-specific info so they can be collapsed
+  # Name fields are never null
+  commits_no_null_login <- commits
+  null_author_login <- which(is.na(commits_no_null_login$author_login))
+  null_committer_login <- which(is.na(commits_no_null_login$committer_login))
+  commits_no_null_login[null_author_login, "author_login"] <- commits_no_null_login[null_author_login, "author_name"]
+  commits_no_null_login[null_committer_login, "committer_login"] <- commits_no_null_login[null_committer_login, "committer_name"]
+  
+  # Return an object
+  list(commits = commits, commits_no_null_login = commits_no_null_login)
+}
+
+# Get commit info for main and high profile repos
+commit_info_main <- get_commits(proj_main, gender_main)
+commit_info_high_prof <- get_commits(proj_high_prof, gender_high_prof)
+```
+
+Get paper author lists
+
+```{r load_author_lists}
+# Function to get author lists of papers from BigQuery
+get_author_lists <- function(proj) {
+  query <- paste("SELECT repo_name, title, authors FROM [", 
+                 proj, ":", ds_lit_search, ".", table_article_metadata, "]",
+                 sep = "")
+  query_exec(query, project = proj, max_pages = Inf)
+}
+
+# Get author lists
+author_lists_main <- get_author_lists(proj_main)
+author_lists_high_prof <- get_author_lists(proj_high_prof)
+```
+
+## Combine commit authors and committers into one table and look at gender breakdown
+
+```{r developers}
+# Collapse by name and login, keeping a version with a gender call where possible
+commit_authors <- function(commits_no_null_login) {
+  commits_no_null_login %>% 
+    select(author_login, author_name, author_gender) %>% 
+    group_by(author_name) %>% 
+    arrange(author_gender) %>% 
+    filter(row_number() == 1) %>% 
+    ungroup() %>% 
+    group_by(author_login) %>% 
+    arrange(author_gender) %>% 
+    filter(row_number() == 1) %>%
+    rename(name = author_name, gender = author_gender) %>%
+    ungroup() %>%
+    select(name, gender)
+}
+committers <- function(commits_no_null_login) {
+  commits_no_null_login %>% 
+    select(committer_login, committer_name, committer_gender) %>% 
+    group_by(committer_name) %>% 
+    arrange(committer_gender) %>% 
+    filter(row_number() == 1) %>% 
+    ungroup() %>% 
+    group_by(committer_login) %>% 
+    arrange(committer_gender) %>% 
+    filter(row_number() == 1) %>%
+    rename(name = committer_name, gender = committer_gender) %>%
+    ungroup() %>%
+    select(name, gender)
+}
+developers <- function(commit_authors, committers) {
+  rbind(commit_authors, committers) %>% unique() %>% arrange(name)
+}
+
+# Get commit authors and committers for main repos and high profile
+commit_authors_main <- commit_authors(commit_info_main$commits_no_null_login)
+commit_authors_high_prof <- commit_authors(commit_info_high_prof$commits_no_null_login)
+committers_main <- committers(commit_info_main$commits_no_null_login)
+committers_high_prof <- committers(commit_info_high_prof$commits_no_null_login)
+developers_main <- developers(commit_authors_main, committers_main)
+developers_high_prof <- developers(commit_authors_high_prof, committers_high_prof)
+
+# Look at gender breakdown of developers
+developers_main %>% group_by(gender) %>% dplyr::summarize(num_developers = n())
+developers_high_prof %>% group_by(gender) %>% dplyr::summarize(num_developers = n())
+```
+
+## Make table of paper authors and look at gender breakdown
+
+```{r paper_authors}
+# Function to get table of paper authors and genders
+paper_authors <- function(author_lists, gender_table) {
+  paper_author_full_names <- NULL
+  for(author_list in author_lists$authors) {
+    paper_author_full_names <- c(paper_author_full_names, 
+                                 sapply(author_list, function(x) trimws(unlist(strsplit(x, ";")))))
+  }
+  paper_author_full_names <- unique(paper_author_full_names)
+  paper_author_gender <- sapply(paper_author_full_names, function(x) get_gender_full_name(x, gender_table))
+  data.frame(name = paper_author_full_names, gender = paper_author_gender)
+}
+
+# Get paper authors
+paper_authors_main <- paper_authors(author_lists_main, gender_main)
+paper_authors_high_prof <- paper_authors(author_lists_high_prof, gender_high_prof)
+
+# Look at total number of unique names among commit authors, committers, paper authors
+# Main repos
+length(unique(c(commit_info_main$commits$author_name, commit_info_main$commits$committer_name, paper_authors_main$name)))
+# High profile repos
+length(unique(c(commit_info_high_prof$commits$author_name, 
+                commit_info_high_prof$commits$committer_name, paper_authors_high_prof$name)))
+
+# Look at gender breakdown of paper authors
+paper_authors_main %>% group_by(gender) %>% dplyr::summarize(num_authors = n())
+paper_authors_high_prof %>% group_by(gender) %>% dplyr::summarize(num_authors = n())
+```
+
+## Gender breakdown of commit authors and committers by repo
+
+```{r summaries}
+# Function to summarize commit authors by repo
+commit_author_summary <- function(commits_no_null_login) {
+  commits_no_null_login %>% 
+    select(repo_name, author_login, author_name, author_gender) %>% 
+    group_by(repo_name, author_name) %>% 
+    arrange(author_gender) %>% 
+    filter(row_number() == 1) %>% 
+    ungroup() %>% 
+    group_by(repo_name, author_login) %>% 
+    arrange(author_gender) %>% 
+    filter(row_number() == 1) %>%
+    ungroup() %>%
+    select(repo_name, author_name, author_gender) %>% 
+    unique() %>% 
+    group_by(repo_name, author_gender) %>% 
+    dplyr::summarize(unique_author_names = n()) %>% 
+    spread(author_gender, unique_author_names, fill = 0) %>%
+    rename(no_gender = "<NA>") %>%
+    ungroup() %>%
+    data.frame()
+}
+
+# Function to summarize commits by repo
+commit_summary <- function(commits_no_null_login) {
+  commits_no_null_login %>% 
+    select(repo_name, author_gender) %>% 
+    group_by(repo_name, author_gender) %>% 
+    dplyr::summarize(num_commits = n()) %>% 
+    spread(author_gender, num_commits, fill = 0) %>% 
+    rename(no_gender = "<NA>") %>% 
+    ungroup %>% 
+    data.frame()
+}
+
+# Summarize commit authors and commits by repo
+commit_author_summary_main <- commit_author_summary(commit_info_main$commits_no_null_login)
+commit_author_summary_high_prof <- commit_author_summary(commit_info_high_prof$commits_no_null_login)
+commit_summary_main <- commit_summary(commit_info_main$commits_no_null_login)
+commit_summary_high_prof <- commit_summary(commit_info_high_prof$commits_no_null_login)
+```
+
+## Functions to classify team types and calculate Shannon index of diversity
+
+```{r diversity_functions}
+# Max proportion of no gender calls to analyze a repo
+max_no_gender <- 0.25
+
+# Classify the repo by its gender breakdown
+classify <- function(male, female, na) {
+  total <- male + female + na
+  if(na / total > max_no_gender) NA
+  else {
+    if (total == 1) {
+      if (male == 1) "Solo male"
+      else if(female == 1) "Solo female"
+      else NA
+    } else {
+      if (male == 0) "All female"
+      else if (female == 0) "All male"
+      else if (male > female) "Majority male"
+      else if (female > male) "Majority female"
+      else "Equal"
+    }
+  }
+}
+
+# Shannon index of diversity
+# counts is vector of category counts
+shannon <- function(counts) {
+  counts <- counts[which(counts != 0)]
+  if(length(counts) == 0) 0
+  else {
+    proportions <- counts / sum(counts)
+    -1 * sum(sapply(proportions, function(x) {x * log(x)}))
+  }
+}
+```
+
+## Calculate Shannon index and classify repos by commit authors
+
+```{r diversity}
+# Add Shannon index and team type to repo summary
+add_diversity_dev <- function(commit_author_summary) {
+  commit_author_summary$team_type <- NA
+  commit_author_summary$shannon <- NA
+  for (i in 1:nrow(commit_author_summary)) {
+    f <- unlist(unname(commit_author_summary[i, "female"]))
+    m <- unlist(unname(commit_author_summary[i, "male"]))
+    ng <- unlist(unname(commit_author_summary[i, "no_gender"]))
+    # Only classify repos with sufficient gender calls
+    total <- m + f + ng
+    if (ng / total > max_no_gender) next
+    s <- shannon(c(f, m))
+    commit_author_summary[i, "team_type"] <- classify(m, f, ng)
+    commit_author_summary[i, "shannon"] <- s
+  }
+  commit_author_summary <- within(commit_author_summary, 
+                                  team_type <- factor(team_type, levels=names(sort(table(team_type), decreasing=TRUE))))
+  commit_author_summary
+}
+# Add diversity info to commit author summaries
+commit_author_summary_main <- add_diversity_dev(commit_author_summary_main)
+commit_author_summary_high_prof <- add_diversity_dev(commit_author_summary_high_prof)
+
+# Add Shannon index to commit summary
+add_diversity_commit <- function(commit_summary) {
+  commit_summary$shannon <- NA
+  for (i in 1:nrow(commit_summary)) {
+    f <- unlist(unname(commit_summary[i, "female"]))
+    m <- unlist(unname(commit_summary[i, "male"]))
+    ng <- unlist(unname(commit_summary[i, "no_gender"]))
+    total <- m + f + ng
+    if (ng / total > 0.25) next
+    s <- shannon(c(f, m))
+    commit_summary[i, "shannon"] <- s
+  }
+  commit_summary
+}
+# Add diversity info to commit summaries
+commit_summary_main <- add_diversity_commit(commit_summary_main)
+commit_summary_high_prof <- add_diversity_commit(commit_summary_high_prof)
+
+# Function to join diversity summaries for commit authors and commits
+diversity_summary <- function(commit_author_summary, commit_summary) {
+  # Join diversity of developers and commits
+  commit_author_summary %>% 
+    select(repo_name, shannon) %>% 
+    rename(shannon_commit_authors = shannon) %>%
+    left_join(commit_summary %>% 
+                select(repo_name, shannon) %>% 
+                rename(shannon_commits = shannon), by = "repo_name")
+}
+
+# Make diversity summaries
+diversity_summary_main <- diversity_summary(commit_author_summary_main, commit_summary_main)
+diversity_summary_high_prof <- diversity_summary(commit_author_summary_high_prof, commit_summary_high_prof)
+```
+
+## Analyze gender breakdown of paper authors by article
+
+```{r paper_authors_summary}
+# Function to get list of genders of a delimited author list
+author_list_genders <- function(author_list, gender_table) {
+  unname(
+    sapply(
+      sapply(
+        author_list, function(x) trimws(unlist(strsplit(x, ";")))), 
+      function(x) get_gender_full_name(x, gender_table)))
+}
+
+# Function to get gender/diversity info for a delimited author list
+gender_stats_author_list <- function(author_list, gender_table) {
+  genders <- author_list_genders(author_list, gender_table)
+  rtrn <- NULL
+  rtrn$female <- sum(genders == "female", na.rm = T)
+  rtrn$male <- sum(genders == "male", na.rm = T)
+  rtrn$na <- sum(is.na(genders))
+  rtrn$first_author <- if(length(genders) > 1) genders[1] else NA
+  rtrn$last_author <- if(length(genders) > 1) genders[length(genders)] else NA
+  rtrn
+}
+
+# Function to summarize diversity info of author lists by repo
+paper_authors_summary <- function(author_lists, gender_table) {
+  rtrn <- data.frame(repo_name = character(),
+                     title = character(),
+                     female = integer(),
+                     male = integer(),
+                     no_gender = integer(),
+                     team_type = character(),
+                     first_author = character(),
+                     last_author = character(),
+                     shannon = numeric())
+  for(i in 1:nrow(author_lists)) {
+    repo_name <- author_lists[i, "repo_name"]
+    title <- author_lists[i, "title"]
+    author_list <- author_lists[i, "authors"]
+    gender_stats <- gender_stats_author_list(author_list, gender_table)
+    male <- gender_stats$male
+    female <- gender_stats$female
+    no_gender <- gender_stats$na
+    team_type <- classify(male, female, no_gender)
+    first_author <- gender_stats$first_author
+    last_author <- gender_stats$last_author
+    sd <- shannon(c(male, female))
+    rtrn <- rbind(rtrn,
+                  data.frame(repo_name = repo_name,
+                             title = title,
+                             female = female,
+                             male = male,
+                             no_gender = no_gender,
+                             team_type = team_type,
+                             first_author = first_author,
+                             last_author = last_author,
+                             shannon = sd))
+  }
+  rtrn
+}
+
+# Summarize author list diversity by repo
+paper_authors_summary_main <- paper_authors_summary(author_lists_main, gender_main)
+paper_authors_summary_high_prof <- paper_authors_summary(author_lists_high_prof, gender_high_prof)
+```
+
+## Summarize developers, commits, and paper authors by gender
+
+```{r gender_summary_figure, fig.width = 10, fig.height = 8}
+# Function to combine several diversity measurements into a tidy summary table
+gender_summary_tidy <- function(developers, commits_no_null_login, paper_authors_summary, dataset_name) {
+  paper_authors_summary_dedup_articles <- paper_authors_summary %>% 
+    select(-repo_name) %>%
+    unique()
+  gender_summary_developers <- developers %>% 
+    group_by(gender) %>% 
+    dplyr::summarize(n = n()) %>% 
+    filter(gender %in% c("female", "male")) %>% 
+    mutate(total = sum(n), p = n / total) %>%
+    mutate(stat = "Developers")
+  gender_summary_commit_author <- commits_no_null_login %>%
+    group_by(author_gender) %>% 
+    dplyr::summarize(n = n()) %>% 
+    rename(gender = author_gender) %>%
+    filter(gender %in% c("female", "male")) %>% 
+    mutate(total = sum(n), p = n / total) %>%
+    mutate(stat = "Commits")
+  gender_summary_first_author <- paper_authors_summary_dedup_articles %>%
+    group_by(first_author) %>%
+    dplyr::summarize(n = n()) %>%
+    rename(gender = first_author) %>%
+    filter(gender %in% c("female", "male")) %>% 
+    mutate(total = sum(n), p = n / total) %>%
+    mutate(stat = "First authors")
+  gender_summary_last_author <- paper_authors_summary_dedup_articles %>%
+    group_by(last_author) %>%
+    dplyr::summarize(n = n()) %>%
+    rename(gender = last_author) %>%
+    filter(gender %in% c("female", "male")) %>% 
+    mutate(total = sum(n), p = n / total) %>%
+    mutate(stat = "Last authors")
+  gender_summary_paper_authors <- data.frame(
+    gender = c("female", "male"), 
+    n = c(sum(paper_authors_summary_dedup_articles$female), sum(paper_authors_summary_dedup_articles$male))) %>% 
+    mutate(total = sum(n), p = n / total) %>%
+    mutate(stat = "Paper authors")
+  
+  rbind(gender_summary_commit_author, gender_summary_developers, gender_summary_paper_authors,
+        gender_summary_first_author, gender_summary_last_author) %>%
+    rename(Gender = gender) %>%
+    mutate(Dataset = dataset_name)
+}
+
+# Make the diversity summaries
+gender_summary_main <- gender_summary_tidy(developers_main, 
+                                           commit_info_main$commits_no_null_login,
+                                           paper_authors_summary_main, 
+                                           "Main repos")
+gender_summary_high_profile <- gender_summary_tidy(developers_high_prof, 
+                                                   commit_info_high_prof$commits_no_null_login,
+                                                   paper_authors_summary_high_prof, 
+                                                   "High profile repos")
+gender_summary_tidy <- rbind(gender_summary_main, gender_summary_high_profile)
+
+# Reorder the factors
+gender_summary_tidy <- within(gender_summary_tidy, stat <- factor(stat, levels=c("Developers", "Commits", "Paper authors", "First authors", "Last authors")))
+# Add explicit zeros
+for(t1 in unique(gender_summary_tidy$Gender)) {
+  for(t2 in unique(gender_summary_tidy$stat)) {
+    for(t3 in unique(gender_summary_tidy$Dataset)) {
+      if(nrow(gender_summary_tidy %>% filter(Gender == t1 & stat == t2 & Dataset == t3)) == 0) {
+        gender_summary_tidy <- 
+          rbind(data.frame(gender_summary_tidy), 
+                data.frame(Gender = t1, n = 0, 
+                           total = sum(gender_summary_tidy %>% filter(stat == t2 & Dataset == t3) %>% select(n)), 
+                           p = 0, stat = t2, Dataset = t3))
+      }
+    }
+  }
+}
+
+# Make the plot
+ggplot(gender_summary_tidy %>% filter(Gender == "female"), 
+       aes(x = stat, y = p, fill = Dataset)) + 
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = paste(formatC(n, format="d", big.mark=","), 
+                              " / ", 
+                              formatC(total, format="d", big.mark=","), 
+                              sep = "")), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.25,
+            size = 5,
+            fontface = "bold") +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.x = element_text(size = 14, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16)) +
+  ylab("Proportion of female contributors") +
+  scale_fill_manual(values = c(color_high_prof, color_main)) +
+  expand_limits(x = 5.7)
+ggsave("gender_summary.pdf")
+ggsave("gender_summary.png")
+```
+
+## Summarize number of repos by team composition
+
+```{r plot_buckets_dev_team}
+# Make bar plot of team types
+bucket_plot_data_dev_team <- commit_author_summary_main %>% filter(!is.na(team_type))
+ggplot(bucket_plot_data_dev_team, aes(x = team_type)) + 
+  geom_bar(fill = "red3") +
+  theme_bw() +
+  ylab("Number of repos") +
+  theme(axis.title.x = element_blank(),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(size = 18),
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 12, angle = 45, hjust = 1)) +
+  ggtitle(paste("Developer team composition (", nrow(bucket_plot_data_dev_team), " teams)", sep = ""))
+```
+
+```{r bubble_plot_team_composition, fig.width = 7, fig.height = 5}
+# Make bubble plot of team types for developers and paper authors
+make_team_comp_bubble_plot_data <- function(commit_author_summary, paper_authors_summary, dataset) {
+  data <- left_join(commit_author_summary %>% 
+                      select(repo_name, team_type) %>% 
+                      rename(team_type_dev = team_type), 
+                    paper_authors_summary %>% 
+                      select(repo_name, team_type) %>% 
+                      rename(team_type_aut = team_type), by = "repo_name") %>% 
+    filter(!is.na(team_type_dev) & !is.na(team_type_aut)) %>% 
+    select(team_type_dev, team_type_aut) %>% 
+    group_by(team_type_dev, team_type_aut) %>% 
+    dplyr::summarize(num_repos = n()) %>% 
+    arrange(-num_repos)
+  team_type_levels <- c("Solo male", "Majority male", "All male", "Solo female", "Majority female", "All female", "Equal")
+  for(t1 in team_type_levels) {
+    for(t2 in team_type_levels) {
+      if(nrow(data %>% filter(team_type_dev == t1 & team_type_aut == t2)) == 0) {
+        data <- rbind(data.frame(data), data.frame(team_type_dev = t1, team_type_aut = t2, num_repos = NA))
+      }
+    }
+  }
+  data <- within(data, team_type_dev <- factor(team_type_dev, levels = team_type_levels))
+  data <- within(data, team_type_aut <- factor(team_type_aut, levels = team_type_levels))
+  data %>% mutate(Dataset = dataset)
+}
+
+team_comp_bubble_plot_data <- rbind(make_team_comp_bubble_plot_data(commit_author_summary_main, paper_authors_summary_main, "Main repos"),
+                                    make_team_comp_bubble_plot_data(commit_author_summary_high_prof, paper_authors_summary_high_prof, "High profile repos")) %>%
+  filter(!is.na(num_repos))
+
+most_repos <- max(team_comp_bubble_plot_data$num_repos, na.rm = T)
+ggplot(team_comp_bubble_plot_data, aes(x = team_type_dev, y = team_type_aut, col = Dataset)) + 
+  geom_point(aes(size = num_repos)) +
+  geom_point(data = subset(team_comp_bubble_plot_data, Dataset == "High profile repos"), aes(size = num_repos)) +
+  xlab("Commit authors") +
+  ylab("Paper authors") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 14),
+        plot.margin = margin(10, 10, 20, 10),
+        legend.background = element_rect(color = "black", size = 0.3)) +
+  labs(size = "Number of repos") +
+  scale_color_manual(values=c(color_high_prof, color_main), labels = c("High profile repos", "Main repos")) +
+  scale_size(breaks = c(1, seq(20, most_repos - most_repos %% 20, by = 20)))
+ggsave("team_composition.pdf")
+ggsave("team_composition.png")
+
+# Print the number of teams included
+sum(team_comp_bubble_plot_data$num_repos, na.rm = T)
+```
+
+## Plot diversity of developers and commits
+
+```{r diversity_plot_dev_commit, fig.width = 10, fig.height = 8}
+# Plot Shannon index of diversity within developer teams and commits
+shannon_plt_data_devs_commits <- diversity_summary_main %>% 
+  select(shannon_commit_authors, shannon_commits) %>% 
+  filter(!is.na(shannon_commit_authors) & !is.na(shannon_commits)) %>% 
+  group_by(shannon_commit_authors, shannon_commits) %>% 
+  dplyr::summarize(num_repos = n()) %>% 
+  arrange(-num_repos)
+ggplot(shannon_plt_data_devs_commits, aes(x = shannon_commit_authors, y = shannon_commits, size = num_repos)) + 
+  geom_point(color = "red3") +
+  xlab("Shannon diversity index: unique commit authors") +
+  ylab("Shannon diversity index: individual commits") +
+  scale_x_continuous(limits = c(0, 0.7)) +
+  scale_y_continuous(limits = c(0, 0.7)) +
+  theme_bw() +
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16),
+        legend.position = c(0.15, 0.85),
+        legend.background = element_rect(color = "black", size = 0.3)) +
+  labs(size = "Number of repos") +
+  scale_size(breaks = c(1, unname(unlist(shannon_plt_data_devs_commits[1,3]))))
+
+# Print the number of teams included
+sum(shannon_plt_data_devs_commits$num_repos)
+```
+
+## Plot diversity of developers vs team size
+
+```{r diversity_plot_dev_team_size, fig.width = 6, fig.height = 5}
+# Plot Shannon index of diversity and developer team size
+make_dev_team_size_plt_data <- function(commit_author_summary, dataset) {
+  commit_author_summary %>% 
+    mutate(team_size = male + female) %>% 
+    select(team_size, shannon) %>% 
+    filter(!is.na(shannon)) %>% 
+    group_by(team_size, shannon) %>% 
+    dplyr::summarize(num_repos = n()) %>% 
+    arrange(-num_repos) %>%
+    mutate(Dataset = dataset)
+}
+
+dev_team_size_plt_data <- rbind(make_dev_team_size_plt_data(commit_author_summary_main, "Main repos"),
+                                make_dev_team_size_plt_data(commit_summary_high_prof, "High profile repos"))
+most_repos <- unname(unlist(dev_team_size_plt_data[1,3]))
+ggplot(dev_team_size_plt_data, aes(x = team_size, y = shannon, size = num_repos, col = Dataset)) + 
+  geom_point(aes(size = num_repos)) +
+  geom_point(data = subset(dev_team_size_plt_data, Dataset == "High profile repos"), aes(size = num_repos)) +
+  xlab("Developer team size (female + male)") +
+  ylab("Shannon diversity index: unique commit authors") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 14),
+        legend.background = element_rect(color = "black", size = 0.3)) +
+  labs(size = "Number of repos") +
+  scale_size(breaks = c(1, seq(40, most_repos - most_repos %% 40, by = 40))) +
+  scale_x_log10(breaks = c(1, 10, 100, 1000, 10000))
+ggsave("shannon.pdf")
+ggsave("shannon.png")
+
+# Print the number of teams in the figure
+sum(dev_team_size_plt_data$num_repos)
+
+# How many teams have nonzero Shannon index?
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "Main repos" & shannon != 0) %>% select(num_repos) %>% sum()
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "High profile repos" & shannon != 0) %>% select(num_repos) %>% sum()
+
+# How many teams have zero Shannon index?
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "Main repos" & shannon == 0) %>% select(num_repos) %>% sum()
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "High profile repos" & shannon == 0) %>% select(num_repos) %>% sum()
+
+# How many teams have Shannon index > 0.4?
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "Main repos" & shannon > 0.4) %>% select(num_repos) %>% sum()
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "High profile repos" & shannon > 0.4) %>% select(num_repos)
+
+# How many teams have Shannon index <= 0.4?
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "Main repos" & shannon <= 0.4) %>% select(num_repos) %>% sum()
+dev_team_size_plt_data %>% ungroup() %>% filter(Dataset == "High profile repos" & shannon <= 0.4) %>% select(num_repos) %>% sum()
+
+```
+
+
+## Push repo-level results to BigQuery tables
+
+```{r push_to_bq}
+# Function to push analysis to BigQuery
+push_to_bq <- function(proj, commit_author_summary, commit_summary, paper_authors_summary) {
+  upload_job_commit_authors <- insert_upload_job(project = proj, 
+                                                 dataset = ds_analysis, 
+                                                 table = table_gender_commit_authors, 
+                                                 values = commit_author_summary,
+                                                 create_disposition = "CREATE_IF_NEEDED", 
+                                                 write_disposition = "WRITE_TRUNCATE")
+  
+  upload_job_commits <- insert_upload_job(project = proj, 
+                                          dataset = ds_analysis, 
+                                          table = table_gender_commits, 
+                                          values = commit_summary,
+                                          create_disposition = "CREATE_IF_NEEDED", 
+                                          write_disposition = "WRITE_TRUNCATE")
+  
+  upload_job_paper_authors <- insert_upload_job(project = proj, 
+                                                dataset = ds_analysis, 
+                                                table = table_gender_paper_authors, 
+                                                values = paper_authors_summary,
+                                                create_disposition = "CREATE_IF_NEEDED", 
+                                                write_disposition = "WRITE_TRUNCATE")
+}
+
+# Push data for main and high profile repos
+push_to_bq(proj_main, commit_author_summary_main, commit_summary_main, paper_authors_summary_main)
+push_to_bq(proj_high_prof, commit_author_summary_high_prof, commit_summary_high_prof, paper_authors_summary_high_prof)
+```
+
+## Session info
+
+```{r session_info}
+sessionInfo()
+```
+
+
